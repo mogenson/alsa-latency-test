@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "ftrace.h"
@@ -21,22 +22,23 @@ void trace_print_usage(void)
     printf("---------------------------------------------------------------\n");
 }
 
-int trace_start(void)
+int trace_start(char *msg)
 {
     if (trace_fd >= 0)
         write(trace_fd, "1", 1);
     if (marker_fd >= 0)
-        write(marker_fd, "START_TRACE\n", 12);
+        write(marker_fd, msg, strlen(msg));
 
     return 0;
 }
 
-int trace_stop(void)
+int trace_stop(char *msg)
 {
     if (marker_fd >= 0)
-        write(marker_fd, "STOP_TRACE\n", 11);
+        write(marker_fd, msg, strlen(msg));
     if (trace_fd >= 0)
         write(trace_fd, "0", 1);
+
     return 0;
 }
 

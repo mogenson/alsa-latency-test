@@ -2,7 +2,7 @@
 #define FTRACE_H
 
 int trace_init(void);
-int trace_start(void);
-int trace_stop(void);
+int trace_start(char *msg);
+int trace_stop(char *msg);
 
 #endif /* FTRACE_H */
