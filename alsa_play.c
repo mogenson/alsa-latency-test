@@ -58,11 +58,10 @@
 static snd_pcm_t *pcm_handle;
 
 /* audio sample data */
-static FILE *wav_file;
 long wav_size;
 char *wav_buffer;
 
-int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params)
+int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params, int period)
 {
     int ret;
     snd_pcm_uframes_t period_size, threshold;
@@ -86,8 +85,7 @@ int pcm_set_sw_params(snd_pcm_t *handle, snd_pcm_sw_params_t *params)
 
     /* set start threshold. make this equal to period size to avoid underrun
      * during first playback */
-    threshold = PERIOD_SIZE; // needs to be at least 1 frame
-    // threshold = 1; // needs to be at least 1 frame
+    threshold = (period < 0) ? PERIOD_SIZE : period; // needs to be at least 1 frame
     ret = snd_pcm_sw_params_set_start_threshold(handle, params, threshold);
     if (ret) {
         fprintf(stderr, "Couldn't set start threshold: %s\n",
@@ -133,8 +131,8 @@ int pcm_print_hw_params(snd_pcm_hw_params_t *params)
                 snd_strerror(ret));
         return ret;
     }
-    printf("Minimum period size = %lu frames, %lu bytes, direction %d\n",
-           period_frames, period_frames * FRAME_SIZE, dir);
+    printf("Minimum period size = %lu frames, %lu bytes\n", period_frames,
+           period_frames * FRAME_SIZE);
 
     ret = snd_pcm_hw_params_get_buffer_size_min(params, &buffer_frames);
     if (ret) {
@@ -153,8 +151,8 @@ int pcm_print_hw_params(snd_pcm_hw_params_t *params)
                 snd_strerror(ret));
         return ret;
     }
-    printf("Maximum period size = %lu frames, %lu bytes, direction %d\n",
-           period_frames, period_frames * FRAME_SIZE, dir);
+    printf("Maximum period size = %lu frames, %lu bytes\n", period_frames,
+           period_frames * FRAME_SIZE);
 
     ret = snd_pcm_hw_params_get_buffer_size_max(params, &buffer_frames);
     if (ret) {
@@ -173,7 +171,7 @@ void pcm_print_state(snd_pcm_t *handle)
     printf("PCM device state: %s\n", snd_pcm_state_name(snd_pcm_state(handle)));
 }
 
-int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params)
+int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params, int period)
 {
     int ret;
     unsigned int requested_rate, set_rate;
@@ -254,7 +252,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params)
     pcm_print_hw_params(params);
 
     /* set period size */
-    period_size = PERIOD_SIZE;
+    period_size = (period < 0) ? PERIOD_SIZE : period;
     ret = snd_pcm_hw_params_set_period_size(handle, params, period_size, 0);
     if (ret) {
         fprintf(stderr, "Period size not available: %s\n", snd_strerror(ret));
@@ -263,7 +261,7 @@ int pcm_set_hw_params(snd_pcm_t *handle, snd_pcm_hw_params_t *params)
     printf("Period size set to %lu frames\n", period_size);
 
     /* set buffer size */
-    buffer_size = BUFFER_SIZE;
+    buffer_size = (period < 0) ? BUFFER_SIZE : (3*period);
     ret = snd_pcm_hw_params_set_buffer_size(handle, params, buffer_size);
     if (ret) {
         fprintf(stderr, "Buffer size not available: %s\n", snd_strerror(ret));
@@ -409,15 +407,16 @@ int alsa_play(void)
     return -1; // we should never get here
 }
 
-int read_wav_file(void)
+int read_wav_file(char *wav_file)
 {
     int ret;
+    FILE *wav_fd;
 
     /* open wave file and get size */
-    wav_file = fopen("square-test-tone.wav", "rb");
-    fseek(wav_file, 0, SEEK_END);
-    wav_size = ftell(wav_file);
-    rewind(wav_file);
+    wav_fd = fopen(wav_file, "rb");
+    fseek(wav_fd, 0, SEEK_END);
+    wav_size = ftell(wav_fd);
+    rewind(wav_fd);
 
     /* allocate a buffer for audio samples and fill it */
     wav_buffer = malloc(wav_size);
@@ -427,18 +426,18 @@ int read_wav_file(void)
                 strerror(ret));
         return ret;
     }
-    if (fread(wav_buffer, 1, wav_size, wav_file) != wav_size) {
+    if (fread(wav_buffer, 1, wav_size, wav_fd) != wav_size) {
         ret = -1;
         fprintf(stderr, "Error reading wave file\n");
         free(wav_buffer);
         return ret;
     }
-    fclose(wav_file);
+    fclose(wav_fd);
 
     return 0;
 }
 
-int alsa_init(void)
+int alsa_init(char *device_name, char *wav_file, int period)
 {
     /* return values / errors */
     int ret;
@@ -447,13 +446,18 @@ int alsa_init(void)
     snd_pcm_hw_params_t *hw_params;
     snd_pcm_sw_params_t *sw_params;
 
-    ret = read_wav_file();
+    ret = read_wav_file(wav_file);
     if (ret) {
         return ret;
     }
 
     /* open PCM playback device */
-    ret = snd_pcm_open(&pcm_handle, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
+    if (device_name != NULL) {
+        ret =
+            snd_pcm_open(&pcm_handle, device_name, SND_PCM_STREAM_PLAYBACK, 0);
+    } else {
+        ret = snd_pcm_open(&pcm_handle, PCM_DEVICE, SND_PCM_STREAM_PLAYBACK, 0);
+    }
     if (ret) {
         fprintf(stderr, "PCM device open error: %s\n", snd_strerror(ret));
         return ret;
@@ -468,7 +472,7 @@ int alsa_init(void)
                 snd_strerror(ret));
         return ret;
     }
-    ret = pcm_set_hw_params(pcm_handle, hw_params);
+    ret = pcm_set_hw_params(pcm_handle, hw_params, period);
     if (ret) {
         return ret;
     }
@@ -482,7 +486,7 @@ int alsa_init(void)
                 snd_strerror(ret));
         return ret;
     }
-    ret = pcm_set_sw_params(pcm_handle, sw_params);
+    ret = pcm_set_sw_params(pcm_handle, sw_params, period);
     if (ret) {
         return ret;
     }
